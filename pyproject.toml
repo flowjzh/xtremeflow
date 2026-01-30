@@ -1,0 +1,50 @@
+[project]
+name = 'xtremeflow'
+version = '0.1.0'
+description = 'XtremeFlow: A high-performance Python asynchronous task scheduler engineered to push LLM workloads to their absolute physical limits'
+readme = 'README.md'
+requires-python = '>=3.9'
+license = {text = 'MIT'}
+authors = [
+    {name = 'Flow Jiang', email = 'flowjzh@gmail.com'},
+]
+keywords = [
+    'async',
+    'scheduler',
+    'rate-limiting',
+    'llm',
+    'asyncio',
+    'concurrency',
+    'backpressure',
+]
+classifiers = [
+    'Development Status :: 4 - Beta',
+    'Intended Audience :: Developers',
+    'Topic :: Software Development :: Libraries :: Python Modules',
+    'License :: OSI Approved :: MIT License',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3 :: Only',
+    'Operating System :: OS Independent',
+    'Typing :: Typed',
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    'pytest>=8.4.2',
+    'pytest-asyncio>=1.2.0',
+]
+
+[project.urls]
+Homepage = 'https://github.com/flowjzh/xtremeflow'
+Repository = 'https://github.com/flowjzh/xtremeflow.git'
+Issues = 'https://github.com/flowjzh/xtremeflow/issues'
+
+[build-system]
+requires = ['setuptools>=61.0', 'wheel']
+build-backend = 'setuptools.build_meta'
