@@ -28,14 +28,13 @@ Stop being polite with your rate limits. **XtremeFlow is offensive.** It is desi
 ```python
 import asyncio
 from openai import RateLimitError
-from xtremeflow.scheduler.rate_limit import auto_backoff, report_token_usage
-from xtremeflow.scheduler.token import TokenRateScheduler
+from xtremeflow.scheduler.rate_limit import auto_backoff
+from xtremeflow.scheduler.token import TokenRateScheduler, report_token_usage
 
-# Initialize: 10 concurrent slots, 60 RPM, 50k TPM
+# Initialize: 10 concurrent slots, 50k TPM
 scheduler = TokenRateScheduler(
     max_concurrency=10,
-    rpm=60,
-    tpm=50000
+    max_tpm=50000
 )
 
 @auto_backoff(retry_for=RateLimitError, base_retry_after=2.0)
@@ -50,7 +49,7 @@ async def call_llm_api(prompt: str):
     await asyncio.sleep(1)
     
     # Calibration: Refund unused quota to the scheduler
-    report_token_usage(actual_tokens=450)
+    report_token_usage(actual=450)
     
     return "success"
 
@@ -94,7 +93,7 @@ from xtremeflow.pipeline import async_pipeline
 # Producer: scheduler-controlled, exhausts this tier's rate limit
 async def producer(queue: asyncio.Queue):
     async for item in source:
-        task = await scheduler.start_task(llm_api(item), estimate_tokens)
+        task = await scheduler.start_task(llm_api(item), estimated_tokens=1000)
         await queue.put(task)
 
 # Processor: slower sequential processing, yields to next tier
