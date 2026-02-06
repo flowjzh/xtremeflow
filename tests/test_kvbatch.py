@@ -68,3 +68,41 @@ async def test_exception_handling():
 
     with pytest.raises(ValueError, match='Test error'):
         await task
+
+
+@pytest.mark.asyncio
+async def test_async_iterator_streaming_execution():
+    '''Verify that collected tasks start executing as soon as first task completes,
+    without waiting for all items to be collected.
+
+    This tests the streaming optimization where tasks arriving after the first
+    task completes are immediately executed.
+    '''
+    async def task(name, delay):
+        await asyncio.sleep(delay)
+        return name
+
+    async def slow_generator():
+        for i in range(4):
+            await asyncio.sleep(0.05)
+            yield task(f'task_{i}', 0.12)
+
+    start = asyncio.get_event_loop().time()
+    await kv_batch(slow_generator())
+    elapsed = asyncio.get_event_loop().time() - start
+
+    # Timeline:
+    # - t=0.00: generator starts
+    # - t=0.05: task_0 yielded and starts immediately
+    # - t=0.10: task_1 yielded
+    # - t=0.15: task_2 yielded
+    # - t=0.17: task_0 completes, task_1/2 allowed to starts 
+    # - t=0.20: task_3 yield and starts immediately
+    # - t=0.29: task_1/2 completes
+    # - t=0.32: task_3 completes
+    #
+    # Total: ~0.32s (first task + streaming parallel tasks)
+    # If waiting for all items yield first:
+    #    0.20 (yield loop) + 0.24 (fist+rest) = 0.44s
+
+    assert 0.31 < elapsed < 0.33

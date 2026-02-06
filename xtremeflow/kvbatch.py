@@ -30,7 +30,7 @@ Use Case Example:
 '''
 
 import asyncio
-from typing import Awaitable, Iterable, List, TypeVar
+from typing import AsyncIterator, Awaitable, Iterable, List, TypeVar, Union
 
 T = TypeVar('T')
 
@@ -41,11 +41,32 @@ async def _process_aws(*aws: Awaitable[T]) -> List[T]:
     return results
 
 
-def kv_batch(aws: Iterable[Awaitable[T]]) -> asyncio.Task[List[T]]:
+async def _process_async_aws(aws: AsyncIterator[Awaitable[T]]) -> List[T]:
+    queue = asyncio.Queue()
+    first_aw = await aws.__anext__()
+
+    async def collector():
+        async for item in aws:
+            await queue.put(item)
+        await queue.put(None)
+
+    collector_task = asyncio.create_task(collector())
+    first_result = await first_aw
+    rest_tasks = []
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        rest_tasks.append(asyncio.create_task(item))
+    await collector_task
+    return [first_result] + await asyncio.gather(*rest_tasks)
+
+
+def kv_batch(aws: Union[Iterable[Awaitable[T]], AsyncIterator[Awaitable[T]]]) -> asyncio.Task[List[T]]:
     '''Create a batch task with KV cache optimization.
 
     Args:
-        aws: An iterable of awaitables to process.
+        aws: An iterable or async iterator of awaitables to process.
 
     Returns:
         An asyncio.Task that completes with a list of results.
@@ -56,4 +77,6 @@ def kv_batch(aws: Iterable[Awaitable[T]]) -> asyncio.Task[List[T]]:
         ... )
         >>> results = await task
     '''
-    return asyncio.create_task(_process_aws(*aws))
+    return asyncio.create_task(
+        _process_async_aws(aws) if isinstance(aws, AsyncIterator) else
+        _process_aws(*aws))
