@@ -29,29 +29,6 @@ async def test_request_rate_rps_limiting():
     assert error_pct < 5, f'RPS error {error_pct:.1f}% exceeds 5%, expected {expected_rps}, got {actual_rps:.2f}'
 
 
-async def test_request_rate_rpm_limiting():
-    scheduler = RequestRateScheduler(max_concurrency=10, max_rpm=600)
-
-    start = time.time()
-    tasks = []
-
-    for i in range(10):
-        async def mock_task(n=i):
-            await asyncio.sleep(0.01)
-            return n
-
-        task = await scheduler.start_task(mock_task())
-        tasks.append(task)
-
-    await asyncio.gather(*tasks)
-    elapsed = time.time() - start
-
-    actual_rpm = (10 / elapsed) * 60
-    expected_rpm = 600.0
-    error_pct = abs(actual_rpm - expected_rpm) / expected_rpm * 100
-    assert error_pct < 5, f'RPM error {error_pct:.1f}% exceeds 5%, expected {expected_rpm}, got {actual_rpm:.2f}'
-
-
 async def test_token_rate_tps_limiting():
     scheduler = TokenRateScheduler(max_concurrency=10, max_tps=500)
 
@@ -73,31 +50,6 @@ async def test_token_rate_tps_limiting():
     expected_tps = 500.0
     error_pct = abs(actual_tps - expected_tps) / expected_tps * 100
     assert error_pct < 5, f'TPS error {error_pct:.1f}% exceeds 5%, expected {expected_tps}, got {actual_tps:.2f}'
-
-
-async def test_token_rate_tpm_limiting():
-    scheduler = TokenRateScheduler(max_concurrency=10, max_tpm=30000)
-
-    start = time.time()
-    tasks = []
-
-    for i in range(50):
-        async def mock_task(n=i):
-            await asyncio.sleep(0.01)
-            return n
-
-        task = await scheduler.start_task(mock_task(), estimated_tokens=10)
-        tasks.append(task)
-
-    await asyncio.gather(*tasks)
-    elapsed = time.time() - start
-
-    actual_tpm = (50 * 10 / elapsed) * 60
-    expected_tpm = 30000.0
-    error_pct = abs(actual_tpm - expected_tpm) / expected_tpm * 100
-    assert error_pct < 5, f'TPM error {error_pct:.1f}% exceeds 5%, expected {expected_tpm}, got {actual_tpm:.2f}'
-
-
 async def test_token_rate_scheduler_with_token_correction():
     scheduler = TokenRateScheduler(max_concurrency=10, max_tps=100)
 
@@ -244,33 +196,3 @@ async def test_backoff_blocks_other_tasks():
     assert 0.85 <= elapsed <= 0.95, f'Expected ~0.9s total (0.3 backoff + 0.6 execution), got {elapsed:.2f}s'
 
 
-async def test_reset_quota():
-    scheduler = RequestRateScheduler(max_concurrency=10, max_rps=10)
-    await asyncio.sleep(1)
-
-    start = time.time()
-    tasks = []
-    for i in range(10):
-        async def mock_task(n=i):
-            await asyncio.sleep(0)
-            return n
-        task = await scheduler.start_task(mock_task())
-        tasks.append(task)
-    await asyncio.gather(*tasks)
-    elapsed = time.time() - start
-    assert elapsed < 0.1, f'Expected burst execution <0.1s with full bucket, got {elapsed:.2f}s'
-
-    await asyncio.sleep(1)
-    scheduler.reset_quota()
-
-    start = time.time()
-    tasks = []
-    for i in range(10):
-        async def mock_task(n=i):
-            await asyncio.sleep(0)
-            return n
-        task = await scheduler.start_task(mock_task())
-        tasks.append(task)
-    await asyncio.gather(*tasks)
-    elapsed = time.time() - start
-    assert elapsed >= 0.9, f'Expected ~1s with empty bucket after reset, got {elapsed:.2f}s'

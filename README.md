@@ -34,7 +34,7 @@ from xtremeflow.scheduler.token import TokenRateScheduler, report_token_usage
 # Initialize: 10 concurrent slots, 50k TPM
 scheduler = TokenRateScheduler(
     max_concurrency=10,
-    max_tpm=50000
+    max_tps=900  # ~54k TPM
 )
 
 @auto_backoff(retry_for=RateLimitError, base_retry_after=2.0)
@@ -69,6 +69,33 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+### 📏 Rate Limit Configuration
+
+**RPM/TPM → RPS/TPS Conversion**
+
+LLM providers typically quote limits in **RPM** (requests per minute) or **TPM** (tokens per minute) for billing purposes, but rate limiting is enforced per-second in practice. Convert to RPS/TPS:
+
+```python
+RPS = RPM / 60
+TPS = TPM / 60
+
+# Example: 50,000 TPM
+max_tps = 50000 / 60  # ≈ 833 TPS
+```
+
+**Burst Traffic**
+
+If your provider supports burst traffic, gradually increase `burst_ratio` (starting from 0.1) until you encounter throttling errors:
+
+```python
+scheduler = TokenRateScheduler(
+    max_tps=900,
+    burst_ratio=0.1  # Start with 10% burst
+)
+```
+
+> ⚠️ **Important**: Each `burst_ratio` adjustment requires waiting for the provider's rate limiter to cooldown (typically 1-2 minutes) before testing again.
 
 ### 🔥 Performance Tools
 

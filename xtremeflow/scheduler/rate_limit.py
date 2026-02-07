@@ -75,10 +75,10 @@ def get_context() -> Optional[ExecutionContext]:
 
 
 class RateLimitScheduler(TaskScheduler, ABC):
-    def __init__(self, max_concurrency: int, init_ratio: float = 0.0):
+    def __init__(self, max_concurrency: int, burst_ratio: float = 0.0):
         super().__init__(max_concurrency)
         self._backoff_until = 0.0
-        self._initial_ratio = init_ratio
+        self._burst_ratio = burst_ratio
 
     def notify_rate_limit_exceeded(self, retry_after: float):
         self._backoff_until = max(self._backoff_until, time.monotonic() + retry_after)
