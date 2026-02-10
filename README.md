@@ -12,6 +12,9 @@ LLM providers throttle your velocity through a combination of **Concurrency**, *
 **The XtremeFlow Philosophy:**
 Stop being polite with your rate limits. **XtremeFlow is offensive.** It is designed to saturate your provider's capacity with surgical precision. Using a unique **Backpressure Reflex**, it maintains peak velocity until the very moment a limit is hit, executes a synchronized global cool-down, and resumes at full speed the millisecond the provider allows.
 
+Here's an example shows controlled token consumption rate regulated by XtremeFlow's `TokenRateScheduler` (TPM:5000000, BURST_RATIO: 0.1):
+![image](https://github.com/user-attachments/assets/0c1e87bf-41b2-44fb-98cb-b162c8a12d2a)
+
 > ⚠️ **Limitation:** XtremeFlow is currently optimized for **single-process** `asyncio` applications. It manages state in-memory and does not support distributed rate limiting (e.g., Redis-based) out of the box.
 
 ### ⚡ Key Features
