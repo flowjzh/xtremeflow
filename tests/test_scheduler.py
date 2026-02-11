@@ -6,70 +6,137 @@ from xtremeflow.scheduler.request import RequestRateScheduler
 from xtremeflow.scheduler.token import TokenRateScheduler
 
 
-async def test_request_rate_rps_limiting():
-    scheduler = RequestRateScheduler(max_concurrency=10, max_rps=10)
+async def test_request_rate_burst_ratio():
+    '''Test burst_ratio=1.0 allows 2x burst capacity'''
+    scheduler = RequestRateScheduler(max_concurrency=30, max_rps=10, burst_ratio=1.0)
 
+    async def mock_task():
+        await asyncio.sleep(0.001)
+        return 'done'
+
+    # Send 20 requests (2x max_rps) immediately
+    # With burst_ratio=1.0, capacity=10, so we can send 10 from bucket + 10 from refill
+    batch_tasks = []
     start = time.time()
-    tasks = []
-
-    for i in range(20):
-        async def mock_task(n=i):
-            await asyncio.sleep(0.01)
-            return n
-
+    for _ in range(20):
         task = await scheduler.start_task(mock_task())
-        tasks.append(task)
-
-    await asyncio.gather(*tasks)
+        batch_tasks.append(task)
+    await asyncio.gather(*batch_tasks)
     elapsed = time.time() - start
 
     actual_rps = 20 / elapsed
-    expected_rps = 10.0
-    error_pct = abs(actual_rps - expected_rps) / expected_rps * 100
-    assert error_pct < 5, f'RPS error {error_pct:.1f}% exceeds 5%, expected {expected_rps}, got {actual_rps:.2f}'
+    # Should be able to handle ~20 RPS with burst_ratio=1.0
+    assert actual_rps >= 19, f'Burst capacity too low, expected >=19 RPS, got {actual_rps:.2f}'
 
 
-async def test_token_rate_tps_limiting():
-    scheduler = TokenRateScheduler(max_concurrency=10, max_tps=500)
+async def test_request_rate_concurrent_tasks():
+    scheduler = RequestRateScheduler(max_concurrency=20, max_rps=10)
+    call_intervals = []
+    last_call_time = None
 
+    async def mock_task():
+        nonlocal last_call_time
+        now = time.time()
+        if last_call_time:
+            call_intervals.append(now - last_call_time)
+        last_call_time = now
+        await asyncio.sleep(0.001)
+        return 'done'
+
+    await asyncio.sleep(1.0)
+
+    batch_tasks = []
+    for _ in range(20):
+        batch_tasks.append(await scheduler.start_task(mock_task()))
+    await asyncio.gather(*batch_tasks)
+
+    assert len(call_intervals) == 19, 'Called 20 times'
+
+    for name, interval_slice in [
+            ('First 10', slice(0, 10)),
+            ('Last 10', slice(-10, None))]:
+        avg = sum(call_intervals[interval_slice]) / 10
+        assert abs(avg - 0.1) / 0.1 * 100 < 5, f'{name} avg interval {avg:.3f}s deviates >5% from 0.1s'
+
+
+async def test_token_rate_burst_ratio():
+    '''Test burst_ratio=1.0 allows 2x burst capacity for tokens'''
+    tokens_per_task = 50
+    scheduler = TokenRateScheduler(
+        max_concurrency=30,
+        max_tps=500,
+        burst_ratio=1.0
+    )
+
+    async def mock_task():
+        await asyncio.sleep(0.001)
+        return 'done'
+
+    # Send 20 tasks (1000 tokens = 2x max_tps)
+    # With burst_ratio=1.0, capacity=500, so we can process 500 from bucket + 500 from refill
+    batch_tasks = []
     start = time.time()
-    tasks = []
-
-    for i in range(50):
-        async def mock_task(n=i):
-            await asyncio.sleep(0.01)
-            return n
-
-        task = await scheduler.start_task(mock_task(), estimated_tokens=10)
-        tasks.append(task)
-
-    await asyncio.gather(*tasks)
+    for _ in range(20):
+        task = await scheduler.start_task(mock_task(), estimated_tokens=tokens_per_task)
+        batch_tasks.append(task)
+    await asyncio.gather(*batch_tasks)
     elapsed = time.time() - start
 
-    actual_tps = (50 * 10) / elapsed
-    expected_tps = 500.0
-    error_pct = abs(actual_tps - expected_tps) / expected_tps * 100
-    assert error_pct < 5, f'TPS error {error_pct:.1f}% exceeds 5%, expected {expected_tps}, got {actual_tps:.2f}'
+    actual_tps = (20 * tokens_per_task) / elapsed
+    # Should be able to handle ~1000 TPS with burst_ratio=1.0
+    assert actual_tps >= 950, f'Burst capacity too low, expected >=950 TPS, got {actual_tps:.2f}'
+
+
+async def test_token_rate_concurrent_tasks():
+    scheduler = TokenRateScheduler(max_concurrency=20, max_tps=1000)
+    call_intervals = []
+    last_call_time = None
+
+    async def mock_task():
+        nonlocal last_call_time
+        now = time.time()
+        if last_call_time:
+            call_intervals.append(now - last_call_time)
+        last_call_time = now
+        await asyncio.sleep(0.001)
+        return 'done'
+
+    await asyncio.sleep(1.0)
+
+    batch_tasks = []
+    for _ in range(20):
+        batch_tasks.append(await scheduler.start_task(mock_task(), estimated_tokens=100))
+    await asyncio.gather(*batch_tasks)
+
+    assert len(call_intervals) == 19, 'Called 20 times'
+
+    for name, interval_slice in [
+            ('First 10', slice(0, 10)),
+            ('Last 10', slice(-10, None))]:
+        avg = sum(call_intervals[interval_slice]) / 10
+        assert abs(avg - 0.1) / 0.1 * 100 < 5, f'{name} avg interval {avg:.3f}s deviates >5% from 0.1s'
+
 async def test_token_rate_scheduler_with_token_correction():
+    from xtremeflow.scheduler.token import report_token_usage
+
     scheduler = TokenRateScheduler(max_concurrency=10, max_tps=100)
 
     async def overestimated_task():
-        await asyncio.sleep(0.01)
-        from xtremeflow.scheduler.token import report_token_usage
-        report_token_usage(actual=25)
+        await asyncio.sleep(0.001)
+        await report_token_usage(actual=25)
         return 'done'
 
     start = time.time()
     tasks = []
 
-    for _ in range(5):
+    for _ in range(4):
         task = await scheduler.start_task(overestimated_task(), estimated_tokens=50)
         tasks.append(task)
 
     await asyncio.gather(*tasks)
     elapsed = time.time() - start
 
-    assert elapsed < 2.0, 'Token correction should speed up processing'
+    assert elapsed < 1.6, 'Token correction should speed up processing'
 
 
 async def test_concurrency_backpressure():
@@ -194,5 +261,3 @@ async def test_backoff_blocks_other_tasks():
     # - At t=0.3+s, failing_task retries and succeeds
     # - Both complete around t=0.9s
     assert 0.85 <= elapsed <= 0.95, f'Expected ~0.9s total (0.3 backoff + 0.6 execution), got {elapsed:.2f}s'
-
-

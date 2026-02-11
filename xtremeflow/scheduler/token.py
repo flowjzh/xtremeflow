@@ -1,6 +1,5 @@
-import asyncio
 import time
-from typing import Optional, cast
+from typing import Coroutine, Optional, cast
 
 from .request import RequestRateScheduler
 from .rate_limit import get_context
@@ -15,50 +14,39 @@ class TokenRateScheduler(RequestRateScheduler):
     ):
         super().__init__(*args, **kwargs)
         self._max_tps = max_tps
-        self._tps_bucket = (self._max_tps or 0) * self._burst_ratio
-        self._last_token_update = time.monotonic()
+        self._next_tps_allowed_time = time.monotonic() - (self._burst_ratio if max_tps else 0)
 
-    async def start_task(self, coro, estimated_tokens: int, **kwargs) -> asyncio.Task:
+    async def start_task(self, coro: Coroutine, estimated_tokens: int = 0, **kwargs):
         return await super().start_task(
             coro, ctx_extra={'estimated_tokens': estimated_tokens},
             **kwargs)
 
-    def _get_wait_time(self) -> float:
+    def _reserve_ticket(self) -> float:
+        parent_wait = super()._reserve_ticket()
+        if not self._max_tps:
+            return parent_wait
+
         now = time.monotonic()
-        delta = now - self._last_token_update
-        self._last_token_update = now
-
-        if self._max_tps:
-            max_capacity = float(self._max_tps) * (1 + self._burst_ratio)
-            self._tps_bucket = min(max_capacity, self._tps_bucket + delta * self._max_tps)
-
-        waits = [super()._get_wait_time()]
-
         ctx = get_context()
-        tokens = ctx.extra.get('estimated_tokens', 0)
-        if tokens > 0 and self._max_tps:
-            if self._tps_bucket < tokens:
-                waits.append((tokens - self._tps_bucket) / self._max_tps)
-        return max(waits)
+        tokens = ctx.extra.get('estimated_tokens', 0) if ctx else 0
 
-    def _consume_rate_quota(self):
-        super()._consume_rate_quota()
+        lower_bound = now - self._burst_time
+        if self._next_tps_allowed_time < lower_bound:
+            self._next_tps_allowed_time = lower_bound
+
+        tps_start_time = self._next_tps_allowed_time
+        self._next_tps_allowed_time = tps_start_time + (tokens / self._max_tps)
+
+        return max(parent_wait, max(0.0, tps_start_time - now))
+
+    async def _apply_correction(self, actual: int):
         ctx = get_context()
-        tokens = ctx.extra.get('estimated_tokens', 0)
-        if tokens > 0 and self._max_tps:
-            self._tps_bucket -= tokens
-
-    def _apply_correction(self, actual: int):
-        ctx = get_context()
-        estimated = ctx.extra.get('estimated_tokens', 0)
-        diff = estimated - actual
-        if diff == 0:
-            return
-        if self._max_tps:
-            max_capacity = float(self._max_tps) * (1 + self._burst_ratio)
-            self._tps_bucket = min(max_capacity, self._tps_bucket + diff)
+        diff = ctx.extra.get('estimated_tokens', 0) - actual
+        if diff and self._max_tps:
+            async with self._scheduler_lock:
+                self._next_tps_allowed_time -= diff / self._max_tps
 
 
-def report_token_usage(actual: int):
+async def report_token_usage(actual: int):
     ctx = get_context()
-    cast(TokenRateScheduler, ctx.scheduler)._apply_correction(actual)
+    await cast(TokenRateScheduler, ctx.scheduler)._apply_correction(actual)

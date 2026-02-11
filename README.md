@@ -52,7 +52,7 @@ async def call_llm_api(prompt: str):
     await asyncio.sleep(1)
     
     # Calibration: Refund unused quota to the scheduler
-    report_token_usage(actual=450)
+    await report_token_usage(actual=450)
     
     return "success"
 

@@ -79,6 +79,7 @@ class RateLimitScheduler(TaskScheduler, ABC):
         super().__init__(max_concurrency)
         self._backoff_until = 0.0
         self._burst_ratio = burst_ratio
+        self._scheduler_lock = asyncio.Lock()
 
     def notify_rate_limit_exceeded(self, retry_after: float):
         self._backoff_until = max(self._backoff_until, time.monotonic() + retry_after)
@@ -86,20 +87,22 @@ class RateLimitScheduler(TaskScheduler, ABC):
     def _get_backoff_wait(self) -> float:
         return max(0.0, self._backoff_until - time.monotonic())
 
-    def _get_wait_time(self) -> float:
-        return self._get_backoff_wait()
+    async def _wait_for_quota(self):
+        async with self._scheduler_lock:
+            wait_time = self._reserve_ticket()
+
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
+
+        while True:
+            backoff = self._get_backoff_wait()
+            if backoff <= 0:
+                break
+            await asyncio.sleep(backoff)
 
     @abstractmethod
-    def _consume_rate_quota(self):
-        '''Consume rate limit quota. Subclasses must implement this.'''
-
-    async def _wait_for_quota(self):
-        while True:
-            wait_time = self._get_wait_time()
-            if wait_time <= 0:
-                self._consume_rate_quota()
-                break
-            await asyncio.sleep(wait_time)
+    def _reserve_ticket(self) -> float:
+        pass
 
     async def _execute_coro(self, coro: Coroutine, ctx_extra=None, **kwargs) -> Any:
         ctx = ExecutionContext(scheduler=self, extra=ctx_extra)

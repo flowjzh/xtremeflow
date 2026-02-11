@@ -12,25 +12,21 @@ class RequestRateScheduler(RateLimitScheduler):
         **kwargs
     ):
         super().__init__(*args, **kwargs)
-        self._max_rps = float(max_rps) if max_rps else None
-        self._rps_bucket = (max_rps or 0) * self._burst_ratio
-        self._last_update = time.monotonic()
+        self._max_rps = max_rps
+        self._burst_time = self._burst_ratio
+        initial_backoffset = self._burst_ratio if max_rps else 0
+        self._next_rps_allowed_time = time.monotonic() - initial_backoffset
 
-    def _get_wait_time(self) -> float:
+    def _reserve_ticket(self) -> float:
+        if not self._max_rps:
+            return 0.0
+
         now = time.monotonic()
-        delta = now - self._last_update
-        self._last_update = now
+        lower_bound = now - self._burst_time
+        if self._next_rps_allowed_time < lower_bound:
+            self._next_rps_allowed_time = lower_bound
 
-        if self._max_rps:
-            max_capacity = float(self._max_rps) * (1 + self._burst_ratio)
-            self._rps_bucket = min(max_capacity, self._rps_bucket + delta * self._max_rps)
+        start_time = self._next_rps_allowed_time
+        self._next_rps_allowed_time = start_time + (1 / self._max_rps)
 
-        waits = [super()._get_wait_time()]
-        if self._max_rps and self._rps_bucket < 1:
-            waits.append((1 - self._rps_bucket) / self._max_rps)
-
-        return max(waits)
-
-    def _consume_rate_quota(self):
-        if self._max_rps:
-            self._rps_bucket -= 1
+        return max(0.0, start_time - now)
