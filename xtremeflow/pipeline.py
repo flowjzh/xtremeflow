@@ -24,7 +24,7 @@ async def async_pipeline(
     producer: Callable[[asyncio.Queue], Any],
     process_item: Optional[Callable[[Any], Any]] = None,
     workers: int = 1,
-    max_workers: int | None = None,
+    max_workers: Optional[int] = None,
     load_factor: int = 2,
     check_interval: float = 1.0,
 ) -> AsyncGenerator[Any, None]:
@@ -56,6 +56,7 @@ async def async_pipeline(
 
         await signal_task
         return
+
     output_queue = asyncio.Queue()
     worker_tasks = set()
 
