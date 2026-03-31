@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 from xtremeflow.pipeline import async_pipeline
 
 
@@ -180,3 +181,97 @@ async def test_process_item_returns_none():
     # Should yield all results including None values
     # Input: [0, 1, 2, 3, 4] -> Output: [None, 1, None, 3, None]
     assert results == [None, 1, None, 3, None]
+
+
+async def test_single_worker_exception_propagates():
+    """Test that process_item exception propagates in single worker mode."""
+    results = []
+    exception_raised = False
+
+    async def producer(queue):
+        for i in range(10):
+            await queue.put(i)
+
+    async def fail_on_five(x):
+        if x == 5:
+            raise ValueError("Intentional failure at 5")
+        return x * 2
+
+    try:
+        async for item in async_pipeline(producer, process_item=fail_on_five, workers=1):
+            results.append(item)
+    except ValueError as e:
+        exception_raised = True
+        assert str(e) == "Intentional failure at 5"
+
+    assert exception_raised, "Exception should have been raised"
+    # Results before the exception should have been yielded
+    assert results == [0, 2, 4, 6, 8]
+
+
+async def test_multi_worker_exception_propagates():
+    """Test that process_item exception propagates in multi worker mode."""
+    results = []
+    exception_raised = False
+
+    async def producer(queue):
+        for i in range(100):
+            await queue.put(i)
+
+    async def fail_on_fifty(x):
+        await asyncio.sleep(0.001)
+        if x == 50:
+            raise RuntimeError("Failed at 50")
+        return x
+
+    try:
+        async for item in async_pipeline(producer, process_item=fail_on_fifty, workers=4):
+            results.append(item)
+    except RuntimeError as e:
+        exception_raised = True
+        assert str(e) == "Failed at 50"
+
+    assert exception_raised, "Exception should have been raised"
+    # Not all items should be processed (fast fail)
+    assert len(results) < 100
+    # Item 50 should not be in results (it triggered the exception)
+    assert 50 not in results
+
+
+async def test_tasks_cancelled_on_exception():
+    """Test that all tasks are cancelled when exception occurs."""
+    task_started = []
+
+    async def slow_producer(queue):
+        for i in range(100):
+            task_started.append(f"produced_{i}")
+            await queue.put(i)
+            await asyncio.sleep(0.01)
+
+    async def fail_on_ten(x):
+        task_started.append(f"processing_{x}")
+        await asyncio.sleep(0.05)
+        if x == 10:
+            raise ValueError("Stop at 10")
+        return x
+
+    with pytest.raises(ValueError, match="Stop at 10"):
+        async for _ in async_pipeline(slow_producer, process_item=fail_on_ten, workers=5):
+            pass
+
+    # Not all 100 tasks should have started (they were cancelled)
+    assert len(task_started) < 100
+
+
+async def test_producer_exception_propagates():
+    """Test that producer exception propagates."""
+    async def failing_producer(queue):
+        for i in range(10):
+            if i == 5:
+                raise ValueError("Producer failed")
+            await queue.put(i)
+
+    with pytest.raises(ValueError, match="Producer failed"):
+        async for _ in async_pipeline(failing_producer, workers=1):
+            pass
+

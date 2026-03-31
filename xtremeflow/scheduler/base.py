@@ -31,5 +31,5 @@ class TaskScheduler:
 
     async def wait_pending(self):
         if self.pending_tasks:
-            await asyncio.gather(*self.pending_tasks)
+            await asyncio.gather(*self.pending_tasks, return_exceptions=True)
             self.pending_tasks.clear()
