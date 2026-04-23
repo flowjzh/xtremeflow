@@ -275,3 +275,46 @@ async def test_producer_exception_propagates():
         async for _ in async_pipeline(failing_producer, workers=1):
             pass
 
+
+async def test_monitor_waits_for_producer_completion():
+    """Producer completes successfully even when queue temporarily empties.
+
+    When workers process faster than producer produces, the queue may empty
+    before the producer finishes. Monitor must wait for BOTH producer completion
+    AND queue drainage before exiting.
+    """
+    producer_completed = False
+    results = []
+
+    async def slow_batched_producer(queue):
+        nonlocal producer_completed
+        for i in range(5):
+            await queue.put(i)
+
+        await asyncio.sleep(0.3)
+
+        for i in range(5, 10):
+            await queue.put(i)
+
+        producer_completed = True
+
+    async def fast_worker(x):
+        await asyncio.sleep(0.01)
+        return x * 2
+
+    async for result in async_pipeline(
+        slow_batched_producer,
+        process_item=fast_worker,
+        workers=5,
+        max_workers=10,
+        load_factor=1,
+        check_interval=0.05
+    ):
+        results.append(result)
+
+    assert producer_completed
+    assert len(results) == 10
+    assert sorted(results) == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+
+
+

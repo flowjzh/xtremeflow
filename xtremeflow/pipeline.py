@@ -139,6 +139,15 @@ async def async_pipeline(
                 break
             result = await output_queue.get()
             if result is _SENTINEL:
+                if len(worker_tasks) == 0:
+                    while True:
+                        try:
+                            remaining_result = output_queue.get_nowait()
+                            if remaining_result is _SENTINEL:
+                                continue
+                            yield remaining_result
+                        except asyncio.QueueEmpty:
+                            break
                 if len(worker_tasks) == 0 and monitor_task.done():
                     break
             else:
