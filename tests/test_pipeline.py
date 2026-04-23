@@ -186,7 +186,6 @@ async def test_process_item_returns_none():
 async def test_single_worker_exception_propagates():
     """Test that process_item exception propagates in single worker mode."""
     results = []
-    exception_raised = False
 
     async def producer(queue):
         for i in range(10):
@@ -197,14 +196,10 @@ async def test_single_worker_exception_propagates():
             raise ValueError("Intentional failure at 5")
         return x * 2
 
-    try:
+    with pytest.raises(ValueError, match="Intentional failure at 5"):
         async for item in async_pipeline(producer, process_item=fail_on_five, workers=1):
             results.append(item)
-    except ValueError as e:
-        exception_raised = True
-        assert str(e) == "Intentional failure at 5"
 
-    assert exception_raised, "Exception should have been raised"
     # Results before the exception should have been yielded
     assert results == [0, 2, 4, 6, 8]
 
@@ -212,7 +207,6 @@ async def test_single_worker_exception_propagates():
 async def test_multi_worker_exception_propagates():
     """Test that process_item exception propagates in multi worker mode."""
     results = []
-    exception_raised = False
 
     async def producer(queue):
         for i in range(100):
@@ -224,18 +218,53 @@ async def test_multi_worker_exception_propagates():
             raise RuntimeError("Failed at 50")
         return x
 
-    try:
+    with pytest.raises(RuntimeError, match="Failed at 50"):
         async for item in async_pipeline(producer, process_item=fail_on_fifty, workers=4):
             results.append(item)
-    except RuntimeError as e:
-        exception_raised = True
-        assert str(e) == "Failed at 50"
 
-    assert exception_raised, "Exception should have been raised"
     # Not all items should be processed (fast fail)
     assert len(results) < 100
     # Item 50 should not be in results (it triggered the exception)
     assert 50 not in results
+
+
+async def test_single_worker_producer_exception_propagates():
+    """Test that producer exception propagates in single worker mode."""
+    results = []
+
+    async def failing_producer(queue):
+        for i in range(10):
+            if i == 5:
+                raise ValueError("Producer failed")
+            await queue.put(i)
+
+    with pytest.raises(ValueError, match="Producer failed"):
+        async for item in async_pipeline(failing_producer, workers=1):
+            results.append(item)
+
+    # Results before the exception should have been yielded
+    assert results == [0, 1, 2, 3, 4]
+
+
+async def test_multi_worker_producer_exception_propagates():
+    """Test that producer exception propagates in multi worker mode."""
+    results = []
+
+    async def failing_producer(queue):
+        for i in range(5):
+            await queue.put(i)
+        raise ValueError("Producer failed after putting data")
+
+    async def worker(x):
+        await asyncio.sleep(0.01)
+        return x * 2
+
+    with pytest.raises(ValueError, match="Producer failed after putting data"):
+        async for result in async_pipeline(failing_producer, process_item=worker, workers=5, max_workers=10):
+            results.append(result)
+
+    # Should have some results before exception
+    assert len(results) <= 5
 
 
 async def test_tasks_cancelled_on_exception():
@@ -261,19 +290,6 @@ async def test_tasks_cancelled_on_exception():
 
     # Not all 100 tasks should have started (they were cancelled)
     assert len(task_started) < 100
-
-
-async def test_producer_exception_propagates():
-    """Test that producer exception propagates."""
-    async def failing_producer(queue):
-        for i in range(10):
-            if i == 5:
-                raise ValueError("Producer failed")
-            await queue.put(i)
-
-    with pytest.raises(ValueError, match="Producer failed"):
-        async for _ in async_pipeline(failing_producer, workers=1):
-            pass
 
 
 async def test_monitor_waits_for_producer_completion():

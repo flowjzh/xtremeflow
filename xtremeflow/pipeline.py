@@ -103,13 +103,15 @@ async def async_pipeline(
         start_worker()
 
     async def monitor():
+        nonlocal first_exception
         try:
             if max_workers is None:
                 try:
                     await producer_task
                     await input_queue.join()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if first_exception is None:
+                        first_exception = e
             else:
                 while not producer_task.done() or not input_queue.empty():
                     await asyncio.sleep(check_interval)
@@ -125,8 +127,9 @@ async def async_pipeline(
                             await input_queue.put(None)
                 try:
                     await producer_task
-                except Exception:
-                    pass
+                except Exception as e:
+                    if first_exception is None:
+                        first_exception = e
         finally:
             for _ in range(len(worker_tasks)):
                 await input_queue.put(None)
