@@ -106,3 +106,131 @@ async def test_async_iterator_streaming_execution():
     #    0.20 (yield loop) + 0.24 (fist+rest) = 0.44s
 
     assert 0.31 < elapsed < 0.33
+
+
+@pytest.mark.filterwarnings('ignore:coroutine .* was never awaited')
+async def test_no_leaked_exceptions_when_first_fails():
+    '''When the first awaitable fails, exception propagates cleanly.'''
+
+    class MarkerError(Exception):
+        pass
+
+    async def failing_first():
+        raise MarkerError('first failed')
+
+    async def succeeding_rest():
+        return 'ok'
+
+    with pytest.raises(MarkerError, match='first failed'):
+        await kv_batch([failing_first(), succeeding_rest()])
+
+
+async def test_no_leaked_exceptions_when_rest_fails():
+    '''When a non-first awaitable fails, other tasks are cancelled and
+    the error propagated without leaking Task exceptions.'''
+
+    class MarkerError(Exception):
+        pass
+
+    async def succeeding_first():
+        return 'first'
+
+    async def failing_rest():
+        raise MarkerError('rest failed')
+
+    async def succeeding_rest():
+        return 'ok'
+
+    with pytest.raises(MarkerError, match='rest failed'):
+        await kv_batch([succeeding_first(), failing_rest(), succeeding_rest()])
+
+
+async def test_async_iter_collector_cancelled_on_first_failure():
+    '''When first awaitable fails, collector_task must be cancelled to prevent
+    the generator from continuing to iterate and leaking exceptions.'''
+
+    class MarkerError(Exception):
+        pass
+
+    leaked = False
+
+    async def failing_first():
+        await asyncio.sleep(0.05)
+        raise MarkerError('first failed')
+
+    async def gen():
+        yield failing_first()
+        await asyncio.sleep(0.1)
+        nonlocal leaked
+        leaked = True
+
+    with pytest.raises(MarkerError, match='first failed'):
+        await kv_batch(gen())
+
+    await asyncio.sleep(0.15)
+    assert not leaked
+
+
+async def test_async_iter_no_leaked_exceptions_when_rest_fails():
+    '''When a non-first awaitable from an async iterator fails, other tasks
+    are cancelled and the error propagated without leaking Task exceptions.'''
+
+    class MarkerError(Exception):
+        pass
+
+    async def succeeding_first():
+        return 'first'
+
+    async def failing_rest():
+        raise MarkerError('rest failed')
+
+    async def succeeding_rest():
+        return 'ok'
+
+    async def gen():
+        yield succeeding_first()
+        yield failing_rest()
+        yield succeeding_rest()
+
+    with pytest.raises(MarkerError, match='rest failed'):
+        await kv_batch(gen())
+
+
+async def test_iterable_accepts_task_as_first_element():
+    async def coro():
+        return 'ok'
+
+    results = await kv_batch([asyncio.create_task(coro()), coro()])
+    assert results == ['ok', 'ok']
+
+
+async def test_iterable_rejects_task_as_rest_element():
+    async def coro():
+        return 'ok'
+
+    with pytest.raises(TypeError, match='kv_batch rest elements must be coroutines'):
+        await kv_batch([coro(), asyncio.create_task(coro())])
+
+
+async def test_async_iter_accepts_task_as_first_element():
+    async def coro():
+        return 'ok'
+
+    async def gen():
+        yield asyncio.create_task(coro())
+        yield coro()
+
+    results = await kv_batch(gen())
+    assert results == ['ok', 'ok']
+
+
+async def test_async_iter_rejects_task_as_rest_element():
+    async def coro():
+        return 'ok'
+
+    async def gen():
+        yield coro()
+        yield asyncio.create_task(coro())
+
+    with pytest.raises(TypeError, match='coroutine was expected'):
+        await kv_batch(gen())

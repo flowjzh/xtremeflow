@@ -30,18 +30,29 @@ Use Case Example:
 '''
 
 import asyncio
-from typing import AsyncIterator, Awaitable, Iterable, List, TypeVar, Union
+from collections.abc import AsyncIterator, Iterable
+from typing import Awaitable, TypeVar, Union
 
 T = TypeVar('T')
 
 
-async def _process_aws(*aws: Awaitable[T]) -> List[T]:
-    results = [await aws[0]] if aws else []
-    results += await asyncio.gather(*aws[1:])
+def _ensure_coroutine(aw):
+    if not asyncio.iscoroutine(aw):
+        raise TypeError(
+            f'kv_batch rest elements must be coroutines, got {type(aw).__name__}'
+        )
+    return aw
+
+
+async def _process_aws(*aws: Awaitable) -> list[T]:
+    if not aws:
+        return []
+    results = [await aws[0]]
+    results += await asyncio.gather(*[_ensure_coroutine(aw) for aw in aws[1:]])
     return results
 
 
-async def _process_async_aws(aws: AsyncIterator[Awaitable[T]]) -> List[T]:
+async def _process_async_aws(aws: AsyncIterator[Awaitable]) -> list[T]:
     queue = asyncio.Queue()
     first_aw = await aws.__anext__()
 
@@ -51,7 +62,11 @@ async def _process_async_aws(aws: AsyncIterator[Awaitable[T]]) -> List[T]:
         await queue.put(None)
 
     collector_task = asyncio.create_task(collector())
-    first_result = await first_aw
+    try:
+        first_result = await first_aw
+    except BaseException:
+        collector_task.cancel()
+        raise
     rest_tasks = []
     while True:
         item = await queue.get()
@@ -62,11 +77,14 @@ async def _process_async_aws(aws: AsyncIterator[Awaitable[T]]) -> List[T]:
     return [first_result] + await asyncio.gather(*rest_tasks)
 
 
-def kv_batch(aws: Union[Iterable[Awaitable[T]], AsyncIterator[Awaitable[T]]]) -> asyncio.Task[List[T]]:
+def kv_batch(aws: Union[Iterable[Awaitable[T]], AsyncIterator[Awaitable[T]]]) -> asyncio.Task[list[T]]:
     '''Create a batch task with KV cache optimization.
 
     Args:
         aws: An iterable or async iterator of awaitables to process.
+            The first element may be an awaitable (Task or coroutine).
+            Rest elements must be native coroutines to preserve the
+            first-wait, then-parallel execution pattern.
 
     Returns:
         An asyncio.Task that completes with a list of results.
