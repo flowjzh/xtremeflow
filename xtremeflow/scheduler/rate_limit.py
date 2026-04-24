@@ -62,8 +62,9 @@ def auto_backoff(
                             f'Retrying in {wait_sec:.1f}s '
                             f'(attempt {attempt + 1}/{max_retries}): {e}'
                         )
-                        ctx.scheduler.notify_rate_limit_exceeded(wait_sec)
-                        await asyncio.sleep(wait_sec)
+                        if wait_sec:
+                            ctx.scheduler.notify_rate_limit_exceeded(wait_sec)
+                            await asyncio.sleep(wait_sec)
                         continue
                     raise last_exc
         return wrapper
