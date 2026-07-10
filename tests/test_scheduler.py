@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import time
 from unittest.mock import patch
 
@@ -261,3 +262,72 @@ async def test_backoff_blocks_other_tasks():
     # - At t=0.3+s, failing_task retries and succeeds
     # - Both complete around t=0.9s
     assert 0.85 <= elapsed <= 0.95, f'Expected ~0.9s total (0.3 backoff + 0.6 execution), got {elapsed:.2f}s'
+
+
+async def test_cancel_during_concurrency_wait_closes_undispatched_coro():
+    '''Window 1: coro held but not wrapped in a task while blocked on the
+    concurrency semaphore must be closed when start_task is cancelled.'''
+    scheduler = RequestRateScheduler(max_concurrency=1)
+
+    async def blocker():
+        await asyncio.sleep(1000)
+
+    async def target():
+        return 'ran'
+
+    blocker_task = await scheduler.start_task(blocker())
+
+    coro = target()
+    wrapper = asyncio.create_task(scheduler.start_task(coro))
+    await asyncio.sleep(0.02)  # let the wrapper block on semaphore.acquire()
+
+    assert not wrapper.done()
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CREATED
+
+    wrapper.cancel()
+    await asyncio.gather(wrapper, return_exceptions=True)
+
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+
+    blocker_task.cancel()
+    await asyncio.gather(blocker_task, return_exceptions=True)
+
+
+async def _assert_quota_wait_cancel_closes_coro(scheduler, start_kwargs):
+    async def priming():
+        return 'primed'
+
+    # Prime so the next reservation pushes the next-allowed time into the
+    # future, forcing the target to actually sleep inside _wait_for_quota().
+    priming_task = await scheduler.start_task(priming(), **start_kwargs)
+    await priming_task
+
+    async def target():
+        return 'ran'
+
+    coro = target()
+    task = await scheduler.start_task(coro, **start_kwargs)
+    await asyncio.sleep(0.02)  # reach the quota sleep; coro still undispatched
+
+    assert not task.done()
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CREATED
+
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+
+
+async def test_cancel_during_rps_quota_wait_closes_undispatched_coro():
+    '''Window 2 (RPS path): coro held but not dispatched during the rate-limit
+    quota wait must be closed when the task is cancelled.'''
+    scheduler = RequestRateScheduler(max_concurrency=10, max_rps=1)
+    await _assert_quota_wait_cancel_closes_coro(scheduler, start_kwargs={})
+
+
+async def test_cancel_during_tps_quota_wait_closes_undispatched_coro():
+    '''Window 2 (TPS path): coro held but not dispatched during the token-rate
+    quota wait must be closed when the task is cancelled.'''
+    scheduler = TokenRateScheduler(max_concurrency=10, max_tps=1)
+    await _assert_quota_wait_cancel_closes_coro(
+        scheduler, start_kwargs={'estimated_tokens': 1000})

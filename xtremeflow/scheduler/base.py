@@ -22,7 +22,11 @@ class TaskScheduler:
         self.semaphore.release()
 
     async def start_task(self, coro: Coroutine, **kwargs) -> asyncio.Task:
-        await self.semaphore.acquire()
+        try:
+            await self.semaphore.acquire()
+        except BaseException:  # CancelledError subclasses BaseException — close the undispatched coro before re-raising
+            coro.close()
+            raise
         self.active_tasks += 1
         task = asyncio.create_task(self._execute_coro(coro, **kwargs))
         self.pending_tasks.add(task)

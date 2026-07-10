@@ -108,8 +108,12 @@ class RateLimitScheduler(TaskScheduler, ABC):
     async def _execute_coro(self, coro: Coroutine, ctx_extra=None, **kwargs) -> Any:
         ctx = ExecutionContext(scheduler=self, extra=ctx_extra)
         token = _current_ctx.set(ctx)
+        dispatched = False
         try:
             await self._wait_for_quota()
+            dispatched = True
             return await super()._execute_coro(coro, **kwargs)
         finally:
             _current_ctx.reset(token)
+            if not dispatched:
+                coro.close()
